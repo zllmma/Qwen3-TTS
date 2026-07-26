@@ -62,6 +62,7 @@ def extract_hidden(
     instruct: str,
     target_layers: List[int],
     hook_mode: str = "pa",
+    calibration_text: str = "test",
 ) -> Dict[int, torch.Tensor]:
     """Run a short prefill and capture hidden states at *target_layers*.
 
@@ -69,6 +70,10 @@ def extract_hidden(
         ``"pa"`` — hook ``post_attention_layernorm``, read pre-norm input
             (post-attention + residual, before FFN).
         ``"ffn"`` — hook the full ``DecoderLayer``, read post-FFN output.
+
+    ``calibration_text``:
+        Short text used to build the prefill sequence.  Using different texts
+        and averaging the resulting steering vectors reduces calibration bias.
     """
     hidden_outputs: Dict[int, dict] = {l: {} for l in target_layers}
     handles: list = []
@@ -96,10 +101,9 @@ def extract_hidden(
 
     try:
         tts.generate_voice_design(
-            text="This is Qwen3-TTS test.",
+            text=calibration_text,
             instruct=instruct,
             language="auto",
-            max_new_tokens=3,
         )
         # Return the hidden state at the *last* (codec-bos) position on every layer.
         return {l: hidden_outputs[l]["val"][0, -1, :] for l in target_layers}
@@ -108,22 +112,58 @@ def extract_hidden(
             h.remove()
 
 
+CALIBRATION_TEXTS = {
+    "zh": [
+        "开始。", "你好。", "请朗读。", "这是一段测试。", "今天天气不错。",
+        "现在开始。", "请继续。", "测试一下。", "读出来。", "说一句话。",
+    ],
+    "en": [
+        "hello.", "please read.", "a test.", "good morning.",
+        "one two three.", "how are you.", "thank you.", "nice day.",
+        "ok.", "start.",
+    ],
+}
+
+
 def calibrate(
     tts,
     instruct: str,
     target_layers: List[int],
     hook_mode: str = "pa",
+    calibration_texts: List[str] | None = None,
+    lang: str | None = None,
 ) -> Dict[int, torch.Tensor]:
     """Compute per-layer steering vectors for *instruct*.
 
     steering[l] = h_strong[l] - h_neutral[l]
 
-    where *h_strong* is the hidden state with *instruct* and *h_neutral*
-    is the hidden state with an empty instruction.
+    *calibration_texts* — short texts used for the calibration prefill.
+    Multiple texts are averaged to reduce single-text bias.  When ``None``,
+    the default set for *lang* is used (``CALIBRATION_TEXTS[lang]``).
+    *lang* has no effect when *calibration_texts* is given explicitly.
     """
-    h_strong = extract_hidden(tts, instruct, target_layers, hook_mode=hook_mode)
-    h_neutral = extract_hidden(tts, "", target_layers, hook_mode=hook_mode)
-    return {l: h_strong[l] - h_neutral[l] for l in target_layers}
+    if calibration_texts is None:
+        if lang is None:
+            lang = "zh"
+        calibration_texts = CALIBRATION_TEXTS.get(lang, CALIBRATION_TEXTS["zh"])
+
+    all_h_strong: dict[int, list[torch.Tensor]] = {l: [] for l in target_layers}
+    all_h_neutral: dict[int, list[torch.Tensor]] = {l: [] for l in target_layers}
+
+    for ct in calibration_texts:
+        h_strong = extract_hidden(tts, instruct, target_layers, hook_mode=hook_mode, calibration_text=ct)
+        h_neutral = extract_hidden(tts, "", target_layers, hook_mode=hook_mode, calibration_text=ct)
+        for l in target_layers:
+            all_h_strong[l].append(h_strong[l])
+            all_h_neutral[l].append(h_neutral[l])
+
+    return {
+        l: (
+            torch.stack(all_h_strong[l]).mean(dim=0)
+            - torch.stack(all_h_neutral[l]).mean(dim=0)
+        )
+        for l in target_layers
+    }
 
 
 def generate(

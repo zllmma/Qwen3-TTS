@@ -30,8 +30,9 @@ def main() -> None:
     MODEL_PATH = "./pretrained/Qwen3-TTS-12Hz-1.7B-VoiceDesign/"
 
     # Steering configuration
-    STEERING_LAYERS: list[int] = list(range(16, 24))   # layers 16–23
-    SCALE: float = 1.0                                  # steering strength
+    # Steering configuration
+    STEERING_LAYERS: list[int] = list(range(16, 24))
+    SCALE: float = 1.0
 
     # Evaluation subset
     INSTRUCTION_TYPE: str = "APS"            # "APS" | "DSD" | "RP"
@@ -42,7 +43,7 @@ def main() -> None:
         MODEL_PATH,
         device_map=device,
         dtype=torch.bfloat16,
-        attn_implementation="sdpa",
+        attn_implementation="flash_attention_2",
     )
 
     print("loading dataset ...")
@@ -61,8 +62,10 @@ def main() -> None:
 
         # Try both hook points: post-FFN ("ffn") and post-attention ("pa")
         for hook_mode, tag_suffix in [("ffn", "ffn"), ("pa", "pa")]:
-            # Per-sample calibration
-            steerings = steer.calibrate(tts, instr, STEERING_LAYERS, hook_mode=hook_mode)
+            # Per-sample calibration (lang auto-selects 10 calibration texts)
+            steerings = steer.calibrate(
+                tts, instr, STEERING_LAYERS, hook_mode=hook_mode, lang="zh",
+            )
             norms = [f"{steerings[l].norm().item():.1f}" for l in STEERING_LAYERS]
             print(f"       [{hook_mode}] steering norms: {norms}")
 
@@ -75,7 +78,6 @@ def main() -> None:
                     "baseline" if layers == []
                     else f"steer_l16-24_s{SCALE:.1f}_{tag_suffix}"
                 )
-                steer.set_seed(42)
                 wav, sr = steer.generate(
                     tts, text, instr, steerings, layers, scale, hook_mode=hook_mode,
                 )
