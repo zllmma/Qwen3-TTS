@@ -22,7 +22,7 @@ Voice Design 模型是 decoder-only 自回归语言模型，指令文本通过 s
 
 ### 第一步：校准 — 提取指令方向
 
-对每一条指令，跑两次极短的 prefill（`max_new_tokens=3`，只为了触发 prefill，不关心输出）：
+对每一条指令，跑两次极短的 prefill：
 
 ```
 含指令:  [instruction tokens] [assistant] [control] [简短 text] [codec_bos]
