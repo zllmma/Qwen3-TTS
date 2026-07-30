@@ -1,11 +1,12 @@
 """Evaluate contrastive activation steering on the InstructTTS-Eval benchmark."""
 
 from __future__ import annotations
-import os
-import steer
+import json
 import random
+import steer
 import torch
 from pathlib import Path
+from typing import Any
 import numpy as np
 import soundfile as sf
 from qwen_tts import Qwen3TTSModel
@@ -22,6 +23,15 @@ def set_seed(seed: int = 42) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+STEERING_LAYERS = list(range(16, 24))
+
+def _write_jsonl(output_dir: Path, split: str, entries: list[dict[str, Any]]) -> None:
+    path = output_dir / f"{split}.jsonl"
+    with open(path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    print(f"  wrote {len(entries)} entries -> {path}")
+
 
 def run_steer(
     tts: Qwen3TTSModel,
@@ -30,133 +40,123 @@ def run_steer(
     hook_mode: str,
     num_samples: int,
     split: str,
-    instr_type: str,
+    instr_types: list[str] = ["APS", "DSD", "RP"]
 ) -> None:
-    # Steering configuration
-    STEERING_LAYERS = list(range(16, 24))
-    SCALE: float = scale
-    GEN_SCALE: float = gen_scale
-    HOOK_MODE = hook_mode
-
-    # Evaluation subset
-    INSTRUCTION_TYPE: str = instr_type  # "APS" | "DSD" | "RP"
-    NUM_SAMPLES: int = num_samples
-    SPLIT: str = split
-    OUTPUT_DIR = Path(".") / "output" / f"{SPLIT.lower()}"
+    OUTPUT_DIR = Path(".") / "output_steer" / split
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("loading dataset ...")
-    ds_all = load_dataset("CaasiHUANG/InstructTTSEval", split=SPLIT)
-    ds = ds_all.select_columns(["id", "text", INSTRUCTION_TYPE]).select(
-        range(NUM_SAMPLES)
-    )
+    ds = load_dataset("CaasiHUANG/InstructTTSEval", split=split)
+    ds = ds.select_columns(["id", "text"] + instr_types).select(range(num_samples))
+
+    entries: list[dict[str, Any]] = []
     for row in ds:
         sid: str = row["id"]
         text: str = row["text"]
-        instr: str = row[INSTRUCTION_TYPE]
-        print(f"[{sid}] text: {text}")
-        print(f"       {INSTRUCTION_TYPE}:  {instr}")
-        sample_dir = OUTPUT_DIR / sid
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        # Per-sample calibration (lang auto-selects 10 calibration texts)
-        steerings = steer.calibrate(
-            tts,
-            instr,
-            STEERING_LAYERS,
-            hook_mode=HOOK_MODE,
-            lang=SPLIT,
-        )
-        norms = [f"{steerings[l].norm().item():.1f}" for l in STEERING_LAYERS]
-        print(f"       [{HOOK_MODE}] steering norms: {norms}")
+        entry: dict[str, Any] = {"id": sid, "text": text}
 
-        tag = f"{INSTRUCTION_TYPE}_{HOOK_MODE}_s{SCALE:.1f}_gens{GEN_SCALE:.1f}"
-        wav, sr = steer.generate(
-            tts,
-            text,
-            instr,
-            steerings,
-            STEERING_LAYERS,
-            SCALE,
-            hook_mode=HOOK_MODE,
-            steer_generate_scale=GEN_SCALE,
-        )
-        fname = sample_dir / f"{sid}_{tag}.wav"
-        sf.write(fname, wav, sr)
-        print(f"       -> {fname} saved")
+        for it in instr_types:
+            instr: str = row[it]
+            print(f"[{sid}] {it}: {instr[:60]}...")
+
+            steerings = steer.calibrate(
+                tts, instr, STEERING_LAYERS,
+                hook_mode=hook_mode, lang=split,
+            )
+            gen_rel = f"{sid}/{sid}_{it}.wav"
+            wav, sr = steer.generate(
+                tts,
+                text,
+                instr,
+                steerings,
+                STEERING_LAYERS,
+                scale,
+                hook_mode=hook_mode,
+                steer_generate_scale=gen_scale,
+            )
+            sf.write(OUTPUT_DIR / gen_rel, wav, sr)
+            print(f"       -> {gen_rel} saved")
+            entry[it] = {"instruction": instr, "gen_path": gen_rel}
+
+        entries.append(entry)
+
+    _write_jsonl(OUTPUT_DIR, split, entries)
 
 
 def run_baseline(
     tts: Qwen3TTSModel,
     num_samples: int,
     split: str,
-    instr_type: str,
+    instr_types: list[str] | None = None,
 ) -> None:
-    # Evaluation subset
-    INSTRUCTION_TYPE: str = instr_type  # "APS" | "DSD" | "RP"
-    NUM_SAMPLES: int = num_samples
-    SPLIT: str = split
-    OUTPUT_DIR = Path(".") / "output" / f"{SPLIT.lower()}"
+    OUTPUT_DIR = Path(".") / "output_baseline" / split
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("loading dataset ...")
-    ds_all = load_dataset("CaasiHUANG/InstructTTSEval", split=SPLIT)
-    ds = ds_all.select_columns(["id", "text", INSTRUCTION_TYPE]).select(
-        range(NUM_SAMPLES)
-    )
+    ds = load_dataset("CaasiHUANG/InstructTTSEval", split=split)
+    ds = ds.select_columns(["id", "text"] + instr_types).select(range(num_samples))
+
+    entries: list[dict[str, Any]] = []
     for row in ds:
         sid: str = row["id"]
         text: str = row["text"]
-        instr: str = row[INSTRUCTION_TYPE]
-        print(f"[{sid}] text: {text}")
-        print(f"       {INSTRUCTION_TYPE}:  {instr}")
-        sample_dir = OUTPUT_DIR / sid
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        tag = f"{INSTRUCTION_TYPE}_baseline"
-        wav, sr = tts.generate_voice_design(text=text, instruct=instr, language="auto")
-        fname = sample_dir / f"{sid}_{tag}.wav"
-        sf.write(fname, wav[0], sr)
-        print(f"       -> {fname} saved")
+        entry: dict[str, Any] = {"id": sid, "text": text}
+
+        for it in instr_types:
+            instr: str = row[it]
+            print(f"[{sid}] {it}: {instr[:60]}...")
+
+            wav, sr = tts.generate_voice_design(
+                text=text, instruct=instr, language="auto"
+            )
+            gen_rel = f"{sid}/{sid}_{it}.wav"
+            sf.write(OUTPUT_DIR / gen_rel, wav[0], sr)
+            print(f"       -> {gen_rel} saved")
+            entry[it] = {"instruction": instr, "gen_path": gen_rel}
+
+        entries.append(entry)
+
+    _write_jsonl(OUTPUT_DIR, split, entries)
 
 
 def run_gt(
     num_samples: int,
     split: str,
+    instr_types: list[str] | None = None,
 ) -> None:
-    OUTPUT_DIR = Path(".") / "output" / f"{split.lower()}"
+    OUTPUT_DIR = Path(".") / "output_gt" / split
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("loading dataset ...")
-    ds_all = load_dataset("CaasiHUANG/InstructTTSEval", split=split)
-    ds = ds_all.select(range(num_samples))
+    ds = load_dataset("CaasiHUANG/InstructTTSEval", split=split)
+    ds = ds.select(range(num_samples))
+
+    entries: list[dict[str, Any]] = []
     for row in ds:
         sid: str = row["id"]
-        sample_dir = OUTPUT_DIR / sid
-        sample_dir.mkdir(parents=True, exist_ok=True)
+        text: str = row["text"]
         audio = row["reference_audio"]
-        wav = audio["array"]
-        sr = audio["sampling_rate"]
-        fname = sample_dir / f"{sid}_gt.wav"
-        sf.write(fname, wav, sr)
-        print(f"[{sid}] gt saved -> {fname}")
+        gen_rel = f"{sid}/{sid}.wav"
+        sf.write(OUTPUT_DIR / gen_rel, audio["array"], audio["sampling_rate"])
+        print(f"[{sid}] gt saved -> {gen_rel}")
+
+        entry: dict[str, Any] = {"id": sid, "text": text}
+        for it in instr_types:
+            entry[it] = {"instruction": row[it], "gen_path": gen_rel}
+        entries.append(entry)
+
+    _write_jsonl(OUTPUT_DIR, split, entries)
 
 
 if __name__ == "__main__":
-    MODEL_PATH = Path(".") / "pretrained" / "Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-    device = "cuda:0"
+    set_seed(42)
+    MODEL_PATH = "./pretrained/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     tts = Qwen3TTSModel.from_pretrained(
-        os.fspath(MODEL_PATH),
-        device_map=device,
+        MODEL_PATH,
+        device_map="cuda:0",
         dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
-    run_steer(
-        tts=tts,
-        scale=1.0,
-        gen_scale=0.5,
-        split="zh",
-        hook_mode="pa",
-        num_samples=1,
-        instr_type="RP",
-    )
-    run_baseline(tts=tts, num_samples=1, split="zh", instr_type="RP")
+    run_steer(tts, scale=1.0, gen_scale=0.5, split="zh", hook_mode="pa", num_samples=1)
+    run_baseline(tts, num_samples=1, split="zh")
     run_gt(num_samples=1, split="zh")
