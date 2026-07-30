@@ -57,13 +57,16 @@ def run_steer(
 
         for it in instr_types:
             instr: str = row[it]
-            print(f"[{sid}] {it}: {instr[:60]}...")
+            print(f"[{sid}] {it}: {instr}")
 
             steerings = steer.calibrate(
                 tts, instr, STEERING_LAYERS,
                 hook_mode=hook_mode, lang=split,
             )
-            gen_rel = f"{sid}/{sid}_{it}.wav"
+            sample_dir = OUTPUT_DIR / sid
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            wav_path = sample_dir / f"{sid}_{it}.wav"
+            gen_rel = wav_path.relative_to(OUTPUT_DIR)
             wav, sr = steer.generate(
                 tts,
                 text,
@@ -74,9 +77,9 @@ def run_steer(
                 hook_mode=hook_mode,
                 steer_generate_scale=gen_scale,
             )
-            sf.write(OUTPUT_DIR / gen_rel, wav, sr)
+            sf.write(wav_path, wav, sr)
             print(f"       -> {gen_rel} saved")
-            entry[it] = {"instruction": instr, "gen_path": gen_rel}
+            entry[it] = {"instruction": instr, "gen_path": str(gen_rel)}
 
         entries.append(entry)
 
@@ -87,7 +90,7 @@ def run_baseline(
     tts: Qwen3TTSModel,
     num_samples: int,
     split: str,
-    instr_types: list[str] | None = None,
+    instr_types: list[str] = ["APS", "DSD", "RP"],
 ) -> None:
     OUTPUT_DIR = Path(".") / "output_baseline" / split
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -104,15 +107,18 @@ def run_baseline(
 
         for it in instr_types:
             instr: str = row[it]
-            print(f"[{sid}] {it}: {instr[:60]}...")
+            print(f"[{sid}] {it}: {instr}")
 
             wav, sr = tts.generate_voice_design(
                 text=text, instruct=instr, language="auto"
             )
-            gen_rel = f"{sid}/{sid}_{it}.wav"
-            sf.write(OUTPUT_DIR / gen_rel, wav[0], sr)
+            sample_dir = OUTPUT_DIR / sid
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            wav_path = sample_dir / f"{sid}_{it}.wav"
+            gen_rel = wav_path.relative_to(OUTPUT_DIR)
+            sf.write(wav_path, wav[0], sr)
             print(f"       -> {gen_rel} saved")
-            entry[it] = {"instruction": instr, "gen_path": gen_rel}
+            entry[it] = {"instruction": instr, "gen_path": str(gen_rel)}
 
         entries.append(entry)
 
@@ -122,7 +128,7 @@ def run_baseline(
 def run_gt(
     num_samples: int,
     split: str,
-    instr_types: list[str] | None = None,
+    instr_types: list[str] = ["APS", "DSD", "RP"],
 ) -> None:
     OUTPUT_DIR = Path(".") / "output_gt" / split
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -136,13 +142,16 @@ def run_gt(
         sid: str = row["id"]
         text: str = row["text"]
         audio = row["reference_audio"]
-        gen_rel = f"{sid}/{sid}.wav"
-        sf.write(OUTPUT_DIR / gen_rel, audio["array"], audio["sampling_rate"])
+        sample_dir = OUTPUT_DIR / sid
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        wav_path = sample_dir / f"{sid}.wav"
+        sf.write(wav_path, audio["array"], audio["sampling_rate"])
+        gen_rel = wav_path.relative_to(OUTPUT_DIR)
         print(f"[{sid}] gt saved -> {gen_rel}")
 
         entry: dict[str, Any] = {"id": sid, "text": text}
         for it in instr_types:
-            entry[it] = {"instruction": row[it], "gen_path": gen_rel}
+            entry[it] = {"instruction": row[it], "gen_path": str(gen_rel)}
         entries.append(entry)
 
     _write_jsonl(OUTPUT_DIR, split, entries)
@@ -153,10 +162,10 @@ if __name__ == "__main__":
     MODEL_PATH = "./pretrained/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     tts = Qwen3TTSModel.from_pretrained(
         MODEL_PATH,
-        device_map="cuda:0",
+        device_map="cuda:1",
         dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
     run_steer(tts, scale=1.0, gen_scale=0.5, split="zh", hook_mode="pa", num_samples=1)
-    run_baseline(tts, num_samples=1, split="zh")
-    run_gt(num_samples=1, split="zh")
+    # run_baseline(tts, num_samples=1, split="zh")
+    # run_gt(num_samples=1, split="zh")
