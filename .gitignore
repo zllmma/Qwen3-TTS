@@ -25,3 +25,4 @@ env/
 *.wav
 pretrained/
 output*/
+*.log

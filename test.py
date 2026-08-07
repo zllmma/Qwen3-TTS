@@ -11,6 +11,7 @@ import numpy as np
 import soundfile as sf
 from qwen_tts import Qwen3TTSModel
 from datasets import load_dataset
+from tqdm import tqdm
 
 
 def set_seed(seed: int = 42) -> None:
@@ -50,7 +51,7 @@ def run_steer(
     ds = ds.select_columns(["id", "text"] + instr_types).select(range(num_samples))
 
     entries: list[dict[str, Any]] = []
-    for row in ds:
+    for row in tqdm(ds):
         sid: str = row["id"]
         text: str = row["text"]
         entry: dict[str, Any] = {"id": sid, "text": text}
@@ -66,7 +67,6 @@ def run_steer(
             sample_dir = OUTPUT_DIR / sid
             sample_dir.mkdir(parents=True, exist_ok=True)
             wav_path = sample_dir / f"{sid}_{it}.wav"
-            gen_rel = wav_path.relative_to(OUTPUT_DIR)
             wav, sr = steer.generate(
                 tts,
                 text,
@@ -78,8 +78,8 @@ def run_steer(
                 steer_generate_scale=gen_scale,
             )
             sf.write(wav_path, wav, sr)
-            print(f"       -> {gen_rel} saved")
-            entry[it] = {"instruction": instr, "gen_path": str(gen_rel)}
+            print(f"       -> {wav_path} saved")
+            entry[it] = {"instruction": instr, "gen_path": str(wav_path)}
 
         entries.append(entry)
 
@@ -100,7 +100,7 @@ def run_baseline(
     ds = ds.select_columns(["id", "text"] + instr_types).select(range(num_samples))
 
     entries: list[dict[str, Any]] = []
-    for row in ds:
+    for row in tqdm(ds):
         sid: str = row["id"]
         text: str = row["text"]
         entry: dict[str, Any] = {"id": sid, "text": text}
@@ -115,10 +115,9 @@ def run_baseline(
             sample_dir = OUTPUT_DIR / sid
             sample_dir.mkdir(parents=True, exist_ok=True)
             wav_path = sample_dir / f"{sid}_{it}.wav"
-            gen_rel = wav_path.relative_to(OUTPUT_DIR)
             sf.write(wav_path, wav[0], sr)
-            print(f"       -> {gen_rel} saved")
-            entry[it] = {"instruction": instr, "gen_path": str(gen_rel)}
+            print(f"       -> {wav_path} saved")
+            entry[it] = {"instruction": instr, "gen_path": str(wav_path)}
 
         entries.append(entry)
 
@@ -138,7 +137,7 @@ def run_gt(
     ds = ds.select(range(num_samples))
 
     entries: list[dict[str, Any]] = []
-    for row in ds:
+    for row in tqdm(ds):
         sid: str = row["id"]
         text: str = row["text"]
         audio = row["reference_audio"]
@@ -146,19 +145,18 @@ def run_gt(
         sample_dir.mkdir(parents=True, exist_ok=True)
         wav_path = sample_dir / f"{sid}.wav"
         sf.write(wav_path, audio["array"], audio["sampling_rate"])
-        gen_rel = wav_path.relative_to(OUTPUT_DIR)
-        print(f"[{sid}] gt saved -> {gen_rel}")
+        print(f"[{sid}] gt saved -> {wav_path}")
 
         entry: dict[str, Any] = {"id": sid, "text": text}
         for it in instr_types:
-            entry[it] = {"instruction": row[it], "gen_path": str(gen_rel)}
+            entry[it] = {"instruction": row[it], "gen_path": str(wav_path)}
         entries.append(entry)
 
     _write_jsonl(OUTPUT_DIR, split, entries)
 
 
 if __name__ == "__main__":
-    set_seed(42)
+    # set_seed(42)
     MODEL_PATH = "./pretrained/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     tts = Qwen3TTSModel.from_pretrained(
         MODEL_PATH,
@@ -166,6 +164,8 @@ if __name__ == "__main__":
         dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
-    run_steer(tts, scale=1.0, gen_scale=0.5, split="zh", hook_mode="pa", num_samples=1)
-    # run_baseline(tts, num_samples=1, split="zh")
-    # run_gt(num_samples=1, split="zh")
+    run_steer(tts, scale=1.0, gen_scale=0.5, split="zh", hook_mode="pa", num_samples=1000)
+    # run_baseline(tts, num_samples=1000, split="zh")
+    # run_gt(num_samples=1000, split="en")
+    # run_gt(num_samples=1000, split="zh")
+

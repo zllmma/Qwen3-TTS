@@ -96,28 +96,10 @@ def extract_hidden(
 
 CALIBRATION_TEXTS = {
     "zh": [
-        "开始。",
-        "你好。",
-        "请朗读。",
         "这是一段测试。",
-        "今天天气不错。",
-        "现在开始。",
-        "请继续。",
-        "测试一下。",
-        "读出来。",
-        "说一句话。",
     ],
     "en": [
-        "hello.",
-        "please read.",
-        "a test.",
-        "good morning.",
-        "one two three.",
-        "how are you.",
-        "thank you.",
-        "nice day.",
-        "ok.",
-        "start.",
+        "this a test.",
     ],
 }
 
